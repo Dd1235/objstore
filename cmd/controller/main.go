@@ -8,11 +8,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/Dd1235/objstore/internal/controller"
 	"github.com/Dd1235/objstore/internal/envflag"
+	"github.com/Dd1235/objstore/internal/meta"
+	"github.com/Dd1235/objstore/internal/workerclient"
 )
 
 func main() {
@@ -24,8 +27,10 @@ func main() {
 
 func run() error {
 	def := controller.DefaultConfig()
-	var cfg controller.Config
+	cfg := def
 	listen := flag.String("listen", envflag.String("LISTEN_ADDR", ":8080"), "listen address (env LISTEN_ADDR)")
+	dataDir := flag.String("data", envflag.String("DATA_DIR", "/data"), "directory for the metadata database (env DATA_DIR)")
+	flag.DurationVar(&cfg.WorkerTimeout, "worker-timeout", envflag.Duration("WORKER_TIMEOUT", def.WorkerTimeout), "limit on each call to a worker (env WORKER_TIMEOUT)")
 	flag.DurationVar(&cfg.HeartbeatInterval, "heartbeat-interval", envflag.Duration("HEARTBEAT_INTERVAL", def.HeartbeatInterval), "worker heartbeat interval (env HEARTBEAT_INTERVAL)")
 	flag.DurationVar(&cfg.TickInterval, "tick-interval", envflag.Duration("TICK_INTERVAL", def.TickInterval), "how often liveness timeouts are checked (env TICK_INTERVAL)")
 	flag.DurationVar(&cfg.Membership.SuspectAfter, "suspect-after", envflag.Duration("SUSPECT_AFTER", def.Membership.SuspectAfter), "silence before a worker is suspect (env SUSPECT_AFTER)")
@@ -35,10 +40,26 @@ func run() error {
 	flag.Parse()
 
 	log := envflag.Logger(*logLevel)
-	c, err := controller.New(cfg, log)
+	if err := os.MkdirAll(*dataDir, 0o755); err != nil {
+		return err
+	}
+	metaPath := filepath.Join(*dataDir, "meta.db")
+	store, err := meta.OpenBolt(metaPath)
 	if err != nil {
 		return err
 	}
+	defer store.Close()
+	log.Info("metadata store opened", "path", metaPath)
+
+	c, err := controller.New(cfg, controller.Deps{
+		Meta:   store,
+		Chunks: &workerclient.Client{HTTP: &http.Client{}, MaxChunk: int64(cfg.ChunkSize)},
+		Log:    log,
+	})
+	if err != nil {
+		return err
+	}
+	defer c.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

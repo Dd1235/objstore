@@ -1,12 +1,17 @@
-// Package controller implements the controller node: worker membership now,
-// and later the client object API, metadata, placement and repair.
+// Package controller implements the controller node: the client object API,
+// worker membership, chunk placement and replica reads.
 //
-// Decision logic lives in pure state machines (see package membership); this
-// package is the driver that feeds them HTTP requests and clock ticks.
+// Decision logic lives in pure, deterministic code (packages membership and
+// placement); this package is the driver that feeds it HTTP requests and
+// clock ticks. All I/O goes through injected dependencies: metadata through
+// meta.Store, worker calls through ChunkClient, randomness through an
+// io.Reader, and time through the now function.
 package controller
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io"
@@ -17,8 +22,10 @@ import (
 	"time"
 
 	"github.com/Dd1235/objstore/internal/api"
+	"github.com/Dd1235/objstore/internal/chunker"
 	"github.com/Dd1235/objstore/internal/ids"
 	"github.com/Dd1235/objstore/internal/membership"
+	"github.com/Dd1235/objstore/internal/meta"
 )
 
 // Config holds controller settings.
@@ -26,6 +33,9 @@ type Config struct {
 	Membership        membership.Config
 	HeartbeatInterval time.Duration // told to workers at registration
 	TickInterval      time.Duration // how often liveness timeouts are applied
+	ChunkSize         int           // bytes per chunk
+	Replicas          int           // copies of each chunk
+	WorkerTimeout     time.Duration // limit on each call to a worker
 }
 
 // DefaultConfig returns settings for the local Docker deployment.
@@ -34,32 +44,94 @@ func DefaultConfig() Config {
 		Membership:        membership.DefaultConfig(),
 		HeartbeatInterval: time.Second,
 		TickInterval:      500 * time.Millisecond,
+		ChunkSize:         chunker.Size,
+		Replicas:          2,
+		WorkerTimeout:     5 * time.Second,
 	}
+}
+
+// ChunkClient is how the controller talks to workers. workerclient.Client
+// implements it over HTTP.
+type ChunkClient interface {
+	Put(ctx context.Context, addr, chunkID string, data []byte, sum [sha256.Size]byte) error
+	Get(ctx context.Context, addr, chunkID string) ([]byte, error)
+	Delete(ctx context.Context, addr, chunkID string) error
+	Inventory(ctx context.Context, addr, workerID string) (api.ChunkInventory, error)
+}
+
+// Deps are the controller's external dependencies.
+type Deps struct {
+	Meta   meta.Store
+	Chunks ChunkClient
+	Rand   io.Reader    // source for object IDs; default crypto/rand
+	Log    *slog.Logger // default slog.Default()
 }
 
 // Controller is the controller node.
 type Controller struct {
-	cfg Config
-	log *slog.Logger
-	now func() time.Time
+	cfg    Config
+	log    *slog.Logger
+	now    func() time.Time
+	meta   meta.Store
+	chunks ChunkClient
+	rand   io.Reader
 
-	mu      sync.Mutex
+	mu      sync.Mutex // guards members
 	members *membership.Table
+
+	rmu      sync.Mutex      // orders downloads against deletes
+	readers  map[string]int  // object ID -> downloads in progress
+	deleting map[string]bool // deleted objects whose chunks wait for readers to finish
+
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
+	bg       sync.WaitGroup
 }
 
 // New returns a controller with no registered workers.
-func New(cfg Config, log *slog.Logger) (*Controller, error) {
-	if cfg.HeartbeatInterval <= 0 || cfg.TickInterval <= 0 {
+func New(cfg Config, d Deps) (*Controller, error) {
+	if cfg.HeartbeatInterval <= 0 || cfg.TickInterval <= 0 || cfg.WorkerTimeout <= 0 {
 		return nil, errors.New("controller: intervals must be positive")
+	}
+	if cfg.ChunkSize <= 0 || cfg.Replicas <= 0 {
+		return nil, errors.New("controller: chunk size and replica count must be positive")
+	}
+	if d.Meta == nil || d.Chunks == nil {
+		return nil, errors.New("controller: Meta and Chunks are required")
 	}
 	members, err := membership.New(cfg.Membership)
 	if err != nil {
 		return nil, err
 	}
-	if log == nil {
-		log = slog.Default()
+	if d.Log == nil {
+		d.Log = slog.Default()
 	}
-	return &Controller{cfg: cfg, log: log, now: time.Now, members: members}, nil
+	if d.Rand == nil {
+		d.Rand = rand.Reader
+	}
+	bgCtx, cancel := context.WithCancel(context.Background())
+	return &Controller{
+		cfg: cfg, log: d.Log, now: time.Now, meta: d.Meta, chunks: d.Chunks, rand: d.Rand,
+		members:  members,
+		readers:  make(map[string]int),
+		deleting: make(map[string]bool),
+		bgCtx:    bgCtx, bgCancel: cancel,
+	}, nil
+}
+
+// Close stops background work (chunk clean-up, read repair) and waits for it.
+func (c *Controller) Close() {
+	c.bgCancel()
+	c.bg.Wait()
+}
+
+// background runs fn on its own goroutine, tracked so Close can wait for it.
+func (c *Controller) background(fn func(ctx context.Context)) {
+	c.bg.Add(1)
+	go func() {
+		defer c.bg.Done()
+		fn(c.bgCtx)
+	}()
 }
 
 // Handler returns the controller's HTTP routes.
@@ -72,6 +144,49 @@ func (c *Controller) Handler() http.Handler {
 		api.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	return mux
+}
+
+// workerRef is a worker ID with the address used to reach it.
+type workerRef struct{ id, addr string }
+
+// placeable returns the workers that may receive new chunk copies.
+func (c *Controller) placeable() map[string]string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make(map[string]string)
+	for _, w := range c.members.List() {
+		if w.Placeable() {
+			out[w.ID] = w.Addr
+		}
+	}
+	return out
+}
+
+// readOrder returns the replicas worth reading from: alive workers first,
+// then suspect ones, in the order given. Dead and unknown workers are skipped.
+func (c *Controller) readOrder(replicas []string) []workerRef {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var alive, suspect []workerRef
+	for _, id := range replicas {
+		w, ok := c.members.Get(id)
+		switch {
+		case !ok || !w.Readable():
+		case w.State == membership.Alive:
+			alive = append(alive, workerRef{id, w.Addr})
+		default:
+			suspect = append(suspect, workerRef{id, w.Addr})
+		}
+	}
+	return append(alive, suspect...)
+}
+
+// addr returns the address of a known worker.
+func (c *Controller) addr(id string) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	w, ok := c.members.Get(id)
+	return w.Addr, ok
 }
 
 // Tick applies membership timeouts as of the current time.

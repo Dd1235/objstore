@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/Dd1235/objstore/internal/api"
+	"github.com/Dd1235/objstore/internal/meta"
+	"github.com/Dd1235/objstore/internal/workerclient"
 )
 
 type fakeClock struct{ t time.Time }
@@ -19,7 +21,11 @@ func (f *fakeClock) advance(d time.Duration) { f.t = f.t.Add(d) }
 
 func newTestController(t *testing.T) (*Controller, *fakeClock) {
 	t.Helper()
-	c, err := New(DefaultConfig(), slog.New(slog.DiscardHandler))
+	c, err := New(DefaultConfig(), Deps{
+		Meta:   meta.NewMem(),
+		Chunks: &workerclient.Client{HTTP: &http.Client{}},
+		Log:    slog.New(slog.DiscardHandler),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
