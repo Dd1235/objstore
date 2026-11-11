@@ -1,0 +1,50 @@
+# Build output
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+coverage.*
+
+# Local runtime data
+/data/
+/tmp/
+
+# Environment files
+.env
+.env.*
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# AI assistant files: never commit these
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+.mcp.json
+AGENTS.md
+AGENT.md
+GEMINI.md
+.gemini/
+.codex/
+.cursor/
+.cursorrules
+.cursorignore
+.windsurf/
+.windsurfrules
+.github/copilot-instructions.md
+.github/instructions/
+.aider*
+.continue/
+.cline/
+.clinerules
+.roo/
+.roomodes
+.kiro/
+.junie/
+.augment/
+.tabnine/
+.codeium/
