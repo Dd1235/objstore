@@ -31,6 +31,8 @@ type Error struct {
 	Message string `json:"message"`
 }
 
+func (e *Error) Error() string { return e.Code + ": " + e.Message }
+
 // WriteJSON writes v as JSON with the given status code.
 func WriteJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
