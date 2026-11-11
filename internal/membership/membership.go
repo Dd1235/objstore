@@ -225,13 +225,13 @@ func (t *Table) evaluate(now time.Time, w *Worker) []Transition {
 		var reason string
 		switch {
 		case w.State == Alive && silent >= t.cfg.SuspectAfter:
-			next, reason = Suspect, "no heartbeat for "+silent.String()
+			next, reason = Suspect, "no heartbeat for "+round(silent)
 		case w.State == Suspect && !w.Rejoining && silent >= t.cfg.DeadAfter:
-			next, reason = Dead, "no heartbeat for "+silent.String()
+			next, reason = Dead, "no heartbeat for "+round(silent)
 		case w.State == Suspect && w.Rejoining && silent >= t.cfg.SuspectAfter:
-			next, reason = Dead, "rejoin abandoned, no heartbeat for "+silent.String()
+			next, reason = Dead, "rejoin abandoned, no heartbeat for "+round(silent)
 		case w.State == Suspect && w.Rejoining && now.Sub(w.RejoinStart) >= t.cfg.RejoinAfter:
-			next, reason = Alive, "rejoined after "+now.Sub(w.RejoinStart).String()+" of steady heartbeats"
+			next, reason = Alive, "rejoined after "+round(now.Sub(w.RejoinStart))+" of steady heartbeats"
 		default:
 			return out
 		}
@@ -248,3 +248,5 @@ func (t *Table) set(w *Worker, to State, now time.Time, reason string) Transitio
 	}
 	return tr
 }
+
+func round(d time.Duration) string { return d.Round(time.Millisecond).String() }
