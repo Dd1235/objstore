@@ -1,0 +1,78 @@
+name: objstore
+
+# Shared settings for the four storage workers. Container names are fixed so
+# failures can be demonstrated with `docker stop worker2` / `docker start worker2`.
+x-worker: &worker
+  image: objstore-worker:dev
+  build:
+    context: .
+    target: worker
+  depends_on:
+    - controller
+  mem_limit: 64m
+  environment: &worker-env
+    CONTROLLER_URL: http://controller:8080
+    SCRUB_INTERVAL: ${SCRUB_INTERVAL:-1m}
+    LOG_LEVEL: ${LOG_LEVEL:-info}
+    GOMEMLIMIT: 48MiB
+
+services:
+  controller:
+    image: objstore-controller:dev
+    build:
+      context: .
+      target: controller
+    container_name: controller
+    ports:
+      - "${CONTROLLER_PORT:-8090}:8080"
+    volumes:
+      - controller-data:/data
+    mem_limit: 256m
+    environment:
+      SUSPECT_AFTER: ${SUSPECT_AFTER:-3s}
+      DEAD_AFTER: ${DEAD_AFTER:-20s}
+      REJOIN_AFTER: ${REJOIN_AFTER:-10s}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+  worker1:
+    <<: *worker
+    container_name: worker1
+    environment:
+      <<: *worker-env
+      WORKER_ID: worker1
+    volumes:
+      - worker1-data:/data
+
+  worker2:
+    <<: *worker
+    container_name: worker2
+    environment:
+      <<: *worker-env
+      WORKER_ID: worker2
+    volumes:
+      - worker2-data:/data
+
+  worker3:
+    <<: *worker
+    container_name: worker3
+    environment:
+      <<: *worker-env
+      WORKER_ID: worker3
+    volumes:
+      - worker3-data:/data
+
+  worker4:
+    <<: *worker
+    container_name: worker4
+    environment:
+      <<: *worker-env
+      WORKER_ID: worker4
+    volumes:
+      - worker4-data:/data
+
+volumes:
+  controller-data:
+  worker1-data:
+  worker2-data:
+  worker3-data:
+  worker4-data:
