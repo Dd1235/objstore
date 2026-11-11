@@ -22,7 +22,8 @@ make clean       # stop and delete all volumes
 ```
 
 The controller is published on host port 8090; set `CONTROLLER_PORT` to change it.
-Liveness timeouts can be tuned with `SUSPECT_AFTER`, `DEAD_AFTER` and `REJOIN_AFTER`.
+Liveness timeouts can be tuned with `SUSPECT_AFTER`, `DEAD_AFTER` and `REJOIN_AFTER`, and repair timing
+with `REPAIR_INTERVAL` (5s) and `REPAIR_DELAY` (20s, the wait before the first pass after start).
 
 ## Using the API
 
@@ -44,17 +45,27 @@ curl -s -X PATCH -d '{"status":"reviewed","owner":null}' $API/<id>/metadata
 curl -s $API
 curl -s -X DELETE $API/<id>
 
-# Where the chunks are
+# Where the chunks are, and whether every chunk has its 2 copies
 curl -s localhost:8090/internal/workers/worker1/chunks
+curl -s localhost:8090/internal/replication
 ```
 
 ### Worker failure
 
+Upload something a few MiB or larger first, so that `worker2` holds some of its chunks. Then watch
+`/internal/replication` (`replication_maintained`, the per-status chunk counts, and `copies` per worker):
+
 ```sh
-docker stop worker2     # suspect after 3 s, dead after 20 s; downloads use the other copy
-make workers
-docker start worker2    # rejoining, then alive after 10 s of steady heartbeats
-docker logs controller  # state transitions with reasons
+STATUS=localhost:8090/internal/replication
+curl -s $STATUS          # before: replication_maintained true, every chunk healthy
+docker stop worker2
+curl -s $STATUS          # 3 s: worker2 suspect, its chunks at_risk (grace period, nothing copied yet)
+curl -s $API/<id> -o x   # downloads still work from the other copy
+curl -s $STATUS          # 20 s: worker2 dead, its chunks under_replicated
+curl -s $STATUS          # within 5 s more: copied to other workers, replication_maintained true again
+docker start worker2
+curl -s $STATUS          # rejoining for 10 s, then alive: the extra copies are trimmed back to 2
+docker logs controller   # state changes, "chunk copied" and "copy dropped" with reasons
 ```
 
 ### Data corruption
@@ -96,8 +107,9 @@ Run a controller and a worker directly, without Docker:
 | `internal/ids` | Object and chunk identifiers |
 | `internal/membership` | Worker liveness state machine (alive / suspect / dead) |
 | `internal/placement` | Rendezvous hashing for chunk placement |
+| `internal/repair` | Repair planner: chunk status and the copy, adopt and drop actions that restore 2 copies |
 | `internal/meta` | Object metadata store (bbolt on disk, in-memory for tests) |
-| `internal/controller` | Client REST API, upload/download/delete paths, membership driver |
+| `internal/controller` | Client REST API, upload/download/delete paths, membership driver, repair loop |
 | `internal/workerclient` | Controller's client for the worker chunk API |
 | `internal/worker` | Worker HTTP server, heartbeat agent, scrubber |
 | `internal/worker/store` | On-disk chunk store with checksum verification |
@@ -112,7 +124,7 @@ Run a controller and a worker directly, without Docker:
 - [x] Client REST API: upload, download, metadata get/patch, delete, list
 - [x] Durable controller metadata (bbolt)
 - [x] Reads fall back to the other copy; corrupt or missing copies repaired on read
-- [ ] Repair loop: re-replicate chunks of dead workers, reconcile returning workers, trim surplus
+- [x] Repair loop: re-replicate chunks of dead workers, reconcile returning workers, trim surplus
+- [x] Replication status endpoint for the failure demo
 - [ ] Garbage collection of orphaned chunks and stale pending uploads
-- [ ] Replication status endpoint for the failure demo
 - [ ] Client CLI and demo scripts
