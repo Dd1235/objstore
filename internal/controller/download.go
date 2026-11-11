@@ -111,56 +111,58 @@ func (c *Controller) release(id string) {
 // readChunk returns a verified copy of a chunk. Replicas that are corrupt or
 // missing the chunk are repaired in the background from the verified copy.
 func (c *Controller) readChunk(ctx context.Context, ch meta.Chunk) ([]byte, error) {
-	want, err := hex.DecodeString(ch.SHA256)
+	data, bad, err := c.fetchVerified(ctx, ch.ID, ch.Size, ch.SHA256, c.readOrder(ch.Replicas))
+	if err == nil && len(bad) > 0 {
+		c.repairReplicas(ch, data, bad)
+	}
+	return data, err
+}
+
+// fetchVerified reads a chunk from the first worker in from whose copy has
+// the expected size and checksum. It also returns the workers whose copy was
+// corrupt or missing, so the caller can repair them.
+func (c *Controller) fetchVerified(ctx context.Context, chunkID string, size int64, sha string, from []workerRef) ([]byte, []workerRef, error) {
+	want, err := hex.DecodeString(sha)
 	if err != nil || len(want) != sha256.Size {
-		return nil, fmt.Errorf("bad checksum in metadata for chunk %s", ch.ID)
+		return nil, nil, fmt.Errorf("bad checksum in metadata for chunk %s", chunkID)
 	}
 	var bad []workerRef
 	lastErr := errNoReplica
-	for _, wk := range c.readOrder(ch.Replicas) {
+	for _, wk := range from {
 		wctx, cancel := context.WithTimeout(ctx, c.cfg.WorkerTimeout)
-		data, err := c.chunks.Get(wctx, wk.addr, ch.ID)
+		data, err := c.chunks.Get(wctx, wk.addr, chunkID)
 		cancel()
 		if err == nil {
-			if sum := sha256.Sum256(data); int64(len(data)) != ch.Size || string(sum[:]) != string(want) {
+			if sum := sha256.Sum256(data); int64(len(data)) != size || string(sum[:]) != string(want) {
 				err = fmt.Errorf("%w: checksum differs from controller metadata", workerclient.ErrCorrupt)
 			}
 		}
 		if err == nil {
-			if len(bad) > 0 {
-				c.repairReplicas(ch, data, bad)
-			}
-			return data, nil
+			return data, bad, nil
 		}
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, bad, ctx.Err()
 		}
 		lastErr = err
 		if errors.Is(err, workerclient.ErrCorrupt) || errors.Is(err, workerclient.ErrNotFound) {
-			c.log.Warn("bad replica, trying another copy", "chunk_id", ch.ID, "worker_id", wk.id, "err", err)
+			c.log.Warn("bad replica, trying another copy", "chunk_id", chunkID, "worker_id", wk.id, "err", err)
 			bad = append(bad, wk)
 		} else {
-			c.log.Warn("replica unreachable, trying another copy", "chunk_id", ch.ID, "worker_id", wk.id, "err", err)
+			c.log.Warn("replica unreachable, trying another copy", "chunk_id", chunkID, "worker_id", wk.id, "err", err)
 		}
 	}
-	return nil, fmt.Errorf("chunk %s: %w", ch.ID, lastErr)
+	return nil, bad, fmt.Errorf("chunk %s: %w", chunkID, lastErr)
 }
 
 // repairReplicas rewrites a chunk on workers whose copy was corrupt or
 // missing, using data that has just been verified against the controller's
-// checksum. A worker holding different but self-consistent bytes is told to
-// delete them first.
+// checksum.
 func (c *Controller) repairReplicas(ch meta.Chunk, data []byte, bad []workerRef) {
 	sum := sha256.Sum256(data)
 	c.background(func(ctx context.Context) {
 		for _, wk := range bad {
 			wctx, cancel := context.WithTimeout(ctx, c.cfg.WorkerTimeout)
-			err := c.chunks.Put(wctx, wk.addr, ch.ID, data, sum)
-			if errors.Is(err, workerclient.ErrConflict) {
-				if err = c.chunks.Delete(wctx, wk.addr, ch.ID); err == nil || errors.Is(err, workerclient.ErrNotFound) {
-					err = c.chunks.Put(wctx, wk.addr, ch.ID, data, sum)
-				}
-			}
+			err := c.putReplacing(wctx, wk.addr, ch.ID, data, sum)
 			cancel()
 			if err != nil {
 				c.log.Error("replica repair failed", "chunk_id", ch.ID, "worker_id", wk.id, "err", err)
@@ -169,4 +171,16 @@ func (c *Controller) repairReplicas(ch meta.Chunk, data []byte, bad []workerRef)
 			c.log.Info("replica repaired from verified copy", "chunk_id", ch.ID, "worker_id", wk.id)
 		}
 	})
+}
+
+// putReplacing writes a chunk to a worker. A worker holding different but
+// self-consistent bytes under the same ID is told to delete them first.
+func (c *Controller) putReplacing(ctx context.Context, addr, chunkID string, data []byte, sum [sha256.Size]byte) error {
+	err := c.chunks.Put(ctx, addr, chunkID, data, sum)
+	if errors.Is(err, workerclient.ErrConflict) {
+		if err = c.chunks.Delete(ctx, addr, chunkID); err == nil || errors.Is(err, workerclient.ErrNotFound) {
+			err = c.chunks.Put(ctx, addr, chunkID, data, sum)
+		}
+	}
+	return err
 }
