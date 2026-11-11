@@ -60,6 +60,49 @@ Every read re-hashes the data and compares it with the header. A mismatch marks 
 read fails, so a worker never serves bytes it cannot vouch for. The controller also checks each chunk
 against the checksum in its own metadata (end-to-end check).
 
+## Client API
+
+| Method | Path | Success | Notes |
+| --- | --- | --- | --- |
+| POST | `/api/v1/objects` | 201 | multipart: `file` (required), `metadata` (JSON object of strings); returns the object's metadata and a `Location` header |
+| GET | `/api/v1/objects/{id}` | 200 | original bytes with `Content-Type`, `Content-Length`, `ETag` (SHA-256), `Content-Disposition`; HEAD returns headers only |
+| GET | `/api/v1/objects/{id}/metadata` | 200 | system metadata, chunk list with replica locations, custom metadata |
+| PATCH | `/api/v1/objects/{id}/metadata` | 200 | JSON object; string values add or replace keys, `null` removes a key |
+| DELETE | `/api/v1/objects/{id}` | 204 | |
+| GET | `/api/v1/objects?limit=&offset=` | 200 | oldest first; `next_offset` when more remain |
+| GET | `/internal/workers` | 200 | membership state of every worker |
+| GET | `/internal/workers/{id}/chunks` | 200 | the worker's chunk inventory, proxied by the controller |
+
+Errors are JSON `{"error": "<code>", "message": "..."}` with 400, 404, 409, 500 or 503.
+Custom metadata is limited to 64 keys, keys up to 128 bytes, values up to 2048 bytes.
+The content type comes from the file part's header, else the file extension, else content sniffing.
+
+## Upload, download and delete
+
+**Upload.** The controller writes a `pending` metadata record, then streams the file through the chunker.
+Each chunk goes to the top two workers in rendezvous-hash order among alive workers; if a write fails the
+next worker in that order is tried. Only when every chunk has two acknowledged copies does the record
+become `committed` and visible. Fewer than two usable workers gives 503. On any failure the chunks written
+so far are deleted in the background and the pending record removed (C2).
+
+**Download.** Chunks are read in order from replicas on alive workers first, then suspect ones; dead
+workers are skipped. Each chunk is checked twice: by the worker against its file header, and by the
+controller against the checksum in its metadata. A corrupt or missing copy is skipped and then rewritten
+in the background from the copy that just passed the check (read repair, C5). If no valid copy of the
+first chunk is reachable the request fails with 503; if a later chunk fails, the connection is aborted so
+the client gets a short body rather than wrong bytes.
+
+**Delete.** The record becomes a durable `deleted` tombstone before 204 is returned, so the object is
+never served again (I6). Its chunks are removed once no download of it is in progress (C6), and the
+tombstone is dropped when every copy is confirmed gone. Copies on unreachable workers are left for
+garbage collection.
+
+## Controller metadata
+
+Object records live in a bbolt database at `/data/meta.db` on the controller's volume. Every write
+transaction is fsynced before the request returns (C3). Membership is soft state: after a controller
+restart, workers get `unknown_worker` on their next heartbeat and register again within a second.
+
 ## Membership
 
 Workers register on start and heartbeat every second. The controller keeps each worker in one of three
