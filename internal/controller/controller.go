@@ -140,6 +140,7 @@ func (c *Controller) Handler() http.Handler {
 	mux.HandleFunc("POST /internal/workers/register", c.register)
 	mux.HandleFunc("POST /internal/workers/heartbeat", c.heartbeat)
 	mux.HandleFunc("GET /internal/workers", c.listWorkers)
+	mux.HandleFunc("GET /internal/workers/{worker_id}/chunks", c.workerChunks)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		api.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -187,6 +188,25 @@ func (c *Controller) addr(id string) (string, bool) {
 	defer c.mu.Unlock()
 	w, ok := c.members.Get(id)
 	return w.Addr, ok
+}
+
+// workerChunks proxies a worker's chunk inventory, so it can be inspected
+// through the controller's published port.
+func (c *Controller) workerChunks(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("worker_id")
+	addr, ok := c.addr(id)
+	if !ok {
+		api.WriteError(w, http.StatusNotFound, api.CodeNotFound, "unknown worker "+id)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), c.cfg.WorkerTimeout)
+	defer cancel()
+	inv, err := c.chunks.Inventory(ctx, addr, id)
+	if err != nil {
+		api.WriteError(w, http.StatusServiceUnavailable, api.CodeUnavailable, "worker "+id+" unreachable: "+err.Error())
+		return
+	}
+	api.WriteJSON(w, http.StatusOK, inv)
 }
 
 // Tick applies membership timeouts as of the current time.
