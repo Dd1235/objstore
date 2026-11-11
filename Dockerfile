@@ -25,3 +25,8 @@ COPY --from=build /out/worker /usr/local/bin/worker
 COPY --from=build --chown=65532:65532 /out/data /data
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/worker"]
+
+FROM gcr.io/distroless/static-debian12:nonroot AS client
+COPY --from=build /out/objctl /usr/local/bin/objctl
+WORKDIR /files
+ENTRYPOINT ["/usr/local/bin/objctl"]

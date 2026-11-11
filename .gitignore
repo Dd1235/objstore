@@ -48,3 +48,6 @@ GEMINI.md
 .augment/
 .tabnine/
 .codeium/
+
+# Files exchanged with the client container
+files/

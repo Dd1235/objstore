@@ -72,6 +72,23 @@ services:
     volumes:
       - worker4-data:/data
 
+  # A client node with the objctl CLI. Not started by "up"; run commands with
+  #   docker compose run --rm client status
+  #   docker compose run --rm client put video.mp4
+  # Files are read from and written to ./files on the host.
+  client:
+    image: objstore-client:dev
+    build:
+      context: .
+      target: client
+    profiles: [client]
+    environment:
+      OBJSTORE_URL: http://controller:8080
+    volumes:
+      - ./files:/files
+    depends_on:
+      - controller
+
 volumes:
   controller-data:
   worker1-data:
