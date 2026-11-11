@@ -32,6 +32,8 @@ services:
       SUSPECT_AFTER: ${SUSPECT_AFTER:-3s}
       DEAD_AFTER: ${DEAD_AFTER:-20s}
       REJOIN_AFTER: ${REJOIN_AFTER:-10s}
+      REPAIR_INTERVAL: ${REPAIR_INTERVAL:-5s}
+      REPAIR_DELAY: ${REPAIR_DELAY:-20s}
       LOG_LEVEL: ${LOG_LEVEL:-info}
 
   worker1:

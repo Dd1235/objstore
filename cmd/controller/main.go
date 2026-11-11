@@ -36,6 +36,8 @@ func run() error {
 	flag.DurationVar(&cfg.Membership.SuspectAfter, "suspect-after", envflag.Duration("SUSPECT_AFTER", def.Membership.SuspectAfter), "silence before a worker is suspect (env SUSPECT_AFTER)")
 	flag.DurationVar(&cfg.Membership.DeadAfter, "dead-after", envflag.Duration("DEAD_AFTER", def.Membership.DeadAfter), "silence before a worker is dead and repair may start (env DEAD_AFTER)")
 	flag.DurationVar(&cfg.Membership.RejoinAfter, "rejoin-after", envflag.Duration("REJOIN_AFTER", def.Membership.RejoinAfter), "steady heartbeats needed before a returning worker is alive (env REJOIN_AFTER)")
+	flag.DurationVar(&cfg.RepairInterval, "repair-interval", envflag.Duration("REPAIR_INTERVAL", def.RepairInterval), "time between repair passes (env REPAIR_INTERVAL)")
+	flag.DurationVar(&cfg.RepairDelay, "repair-delay", envflag.Duration("REPAIR_DELAY", def.RepairDelay), "wait after start before the first repair pass (env REPAIR_DELAY)")
 	logLevel := flag.String("log-level", envflag.String("LOG_LEVEL", "info"), "debug, info, warn or error (env LOG_LEVEL)")
 	flag.Parse()
 
@@ -64,13 +66,14 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go c.RunTicker(ctx.Done())
+	c.StartRepair()
 
 	srv := &http.Server{Addr: *listen, Handler: c.Handler(), ReadHeaderTimeout: 5 * time.Second}
 	errc := make(chan error, 1)
 	go func() {
 		log.Info("listening", "addr", *listen,
 			"suspect_after", cfg.Membership.SuspectAfter, "dead_after", cfg.Membership.DeadAfter,
-			"rejoin_after", cfg.Membership.RejoinAfter)
+			"rejoin_after", cfg.Membership.RejoinAfter, "repair_interval", cfg.RepairInterval, "repair_delay", cfg.RepairDelay)
 		errc <- srv.ListenAndServe()
 	}()
 	select {
