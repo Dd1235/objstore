@@ -137,6 +137,10 @@ func (c *Controller) background(fn func(ctx context.Context)) {
 // Handler returns the controller's HTTP routes.
 func (c *Controller) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/objects", c.listObjects)
+	mux.HandleFunc("GET /api/v1/objects/{object_id}/metadata", c.getMetadata)
+	mux.HandleFunc("PATCH /api/v1/objects/{object_id}/metadata", c.patchMetadata)
+
 	mux.HandleFunc("POST /internal/workers/register", c.register)
 	mux.HandleFunc("POST /internal/workers/heartbeat", c.heartbeat)
 	mux.HandleFunc("GET /internal/workers", c.listWorkers)
