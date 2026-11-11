@@ -1,8 +1,8 @@
 // Package controller implements the controller node: the client object API,
-// worker membership, chunk placement and replica reads.
+// worker membership, chunk placement, replica reads and repair.
 //
-// Decision logic lives in pure, deterministic code (packages membership and
-// placement); this package is the driver that feeds it HTTP requests and
+// Decision logic lives in pure, deterministic code (packages membership,
+// placement and repair); this package is the driver that feeds it HTTP requests and
 // clock ticks. All I/O goes through injected dependencies: metadata through
 // meta.Store, worker calls through ChunkClient, randomness through an
 // io.Reader, and time through the now function.
@@ -36,6 +36,8 @@ type Config struct {
 	ChunkSize         int           // bytes per chunk
 	Replicas          int           // copies of each chunk
 	WorkerTimeout     time.Duration // limit on each call to a worker
+	RepairInterval    time.Duration // time between repair passes
+	RepairDelay       time.Duration // wait before the first repair pass after start
 }
 
 // DefaultConfig returns settings for the local Docker deployment.
@@ -47,6 +49,10 @@ func DefaultConfig() Config {
 		ChunkSize:         chunker.Size,
 		Replicas:          2,
 		WorkerTimeout:     5 * time.Second,
+		RepairInterval:    5 * time.Second,
+		// Workers that are running register within a heartbeat or two of a
+		// controller restart; one that has not after dead-after is lost.
+		RepairDelay: membership.DefaultConfig().DeadAfter,
 	}
 }
 
@@ -83,6 +89,9 @@ type Controller struct {
 	readers  map[string]int  // object ID -> downloads in progress
 	deleting map[string]bool // deleted objects whose chunks wait for readers to finish
 
+	repairMu   sync.Mutex
+	lastRepair *api.RepairSummary
+
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
 	bg       sync.WaitGroup
@@ -90,7 +99,7 @@ type Controller struct {
 
 // New returns a controller with no registered workers.
 func New(cfg Config, d Deps) (*Controller, error) {
-	if cfg.HeartbeatInterval <= 0 || cfg.TickInterval <= 0 || cfg.WorkerTimeout <= 0 {
+	if cfg.HeartbeatInterval <= 0 || cfg.TickInterval <= 0 || cfg.WorkerTimeout <= 0 || cfg.RepairInterval <= 0 || cfg.RepairDelay < 0 {
 		return nil, errors.New("controller: intervals must be positive")
 	}
 	if cfg.ChunkSize <= 0 || cfg.Replicas <= 0 {
@@ -119,7 +128,8 @@ func New(cfg Config, d Deps) (*Controller, error) {
 	}, nil
 }
 
-// Close stops background work (chunk clean-up, read repair) and waits for it.
+// Close stops background work (repair, chunk clean-up, read repair) and
+// waits for it.
 func (c *Controller) Close() {
 	c.bgCancel()
 	c.bg.Wait()
@@ -148,6 +158,7 @@ func (c *Controller) Handler() http.Handler {
 	mux.HandleFunc("POST /internal/workers/heartbeat", c.heartbeat)
 	mux.HandleFunc("GET /internal/workers", c.listWorkers)
 	mux.HandleFunc("GET /internal/workers/{worker_id}/chunks", c.workerChunks)
+	mux.HandleFunc("GET /internal/replication", c.replicationStatus)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		api.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
