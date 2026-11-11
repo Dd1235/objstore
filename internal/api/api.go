@@ -143,3 +143,57 @@ type ObjectList struct {
 	Limit      int             `json:"limit"`
 	NextOffset *int            `json:"next_offset,omitempty"`
 }
+
+// ReplicationStatus is the response of GET /internal/replication: whether
+// every chunk of every committed object has the required number of copies.
+type ReplicationStatus struct {
+	ReplicationFactor int       `json:"replication_factor"`
+	CheckedAt         time.Time `json:"checked_at"`
+	// Maintained is true when every chunk has the required copies, all on
+	// alive workers.
+	Maintained      bool `json:"replication_maintained"`
+	Objects         int  `json:"objects"`
+	Chunks          int  `json:"chunks"`
+	Healthy         int  `json:"healthy"`
+	AtRisk          int  `json:"at_risk"`
+	UnderReplicated int  `json:"under_replicated"`
+	OverReplicated  int  `json:"over_replicated"`
+	Unavailable     int  `json:"unavailable"`
+	// PendingActions is the number of repair steps the next pass would take.
+	PendingActions int                 `json:"pending_actions"`
+	Workers        []ReplicationWorker `json:"workers"`
+	// Problems lists chunks that are not healthy (at most 100).
+	Problems   []ChunkReplication `json:"problems"`
+	LastRepair *RepairSummary     `json:"last_repair,omitempty"`
+}
+
+// ReplicationWorker is one worker's share of the chunk copies.
+type ReplicationWorker struct {
+	WorkerID  string `json:"worker_id"`
+	State     string `json:"state"`
+	Rejoining bool   `json:"rejoining,omitempty"`
+	// Copies counts the chunk copies on this worker that count toward the
+	// replication factor.
+	Copies         int    `json:"copies"`
+	InventoryError string `json:"inventory_error,omitempty"`
+}
+
+// ChunkReplication is the replication state of one chunk.
+type ChunkReplication struct {
+	ObjectID string   `json:"object_id"`
+	ChunkID  string   `json:"chunk_id"`
+	Status   string   `json:"status"`
+	Copies   []string `json:"copies"`         // copies that count
+	Down     []string `json:"down,omitempty"` // copies on dead, unknown or rejoining workers
+	Bad      []string `json:"bad,omitempty"`  // copies reported corrupt, wrong or missing
+}
+
+// RepairSummary describes the most recent repair pass.
+type RepairSummary struct {
+	At         time.Time `json:"at"`
+	DurationMS int64     `json:"duration_ms"`
+	Copied     int       `json:"copied"`
+	Adopted    int       `json:"adopted"`
+	Dropped    int       `json:"dropped"`
+	Failed     int       `json:"failed"`
+}
