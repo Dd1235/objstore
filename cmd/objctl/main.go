@@ -298,7 +298,7 @@ func (a *app) meta(ctx context.Context, args []string) error {
 		fmt.Fprintf(tw, "%s\t%s\n", k, info.Metadata[k])
 	}
 	tw.Flush()
-	fmt.Fprintf(a.stdout, "modified %s\n", info.ModifiedAt.Local().Format(time.DateTime))
+	fmt.Fprintf(a.stdout, "(last modified %s)\n", info.ModifiedAt.Local().Format(time.DateTime))
 	return nil
 }
 
