@@ -139,6 +139,7 @@ func (c *Controller) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/objects", c.uploadObject)
 	mux.HandleFunc("GET /api/v1/objects", c.listObjects)
+	mux.HandleFunc("GET /api/v1/objects/{object_id}", c.downloadObject)
 	mux.HandleFunc("DELETE /api/v1/objects/{object_id}", c.deleteObject)
 	mux.HandleFunc("GET /api/v1/objects/{object_id}/metadata", c.getMetadata)
 	mux.HandleFunc("PATCH /api/v1/objects/{object_id}/metadata", c.patchMetadata)
