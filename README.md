@@ -15,7 +15,8 @@ See [docs/design.md](docs/design.md) for the architecture, on-disk format and co
 
 ```sh
 make up          # build images, start the controller and 4 workers
-make workers     # worker membership as JSON (controller on localhost:8090)
+make build       # build ./bin/objctl, the command-line client (and the server binaries)
+./bin/objctl status
 make logs        # follow all logs
 make down        # stop, keeping stored data
 make clean       # stop and delete all volumes
@@ -25,7 +26,51 @@ The controller is published on host port 8090; set `CONTROLLER_PORT` to change i
 Liveness timeouts can be tuned with `SUSPECT_AFTER`, `DEAD_AFTER` and `REJOIN_AFTER`, and repair timing
 with `REPAIR_INTERVAL` (5s) and `REPAIR_DELAY` (20s, the wait before the first pass after start).
 
-## Using the API
+## Command-line client
+
+`objctl` talks to the controller at `$OBJSTORE_URL` (default `http://localhost:8090`). Add `-json` before
+the command for the raw JSON response.
+
+```sh
+objctl put -meta owner=alice -meta project=demo video.mp4   # prints the object ID and where each chunk went
+objctl get <id>                     # saves under the stored name; size and SHA-256 are verified
+objctl get -o copy.mp4 <id>
+objctl info <id>                    # metadata, chunk list and the workers holding each copy
+objctl meta <id> set status=reviewed
+objctl meta <id> unset owner
+objctl ls
+objctl rm <id>
+objctl workers                      # alive / suspect / dead
+objctl chunks worker2               # what worker2 stores, with corrupt copies flagged
+objctl status                       # is the replication factor maintained? which chunks are not?
+```
+
+The same client also runs as its own container, reading and writing files in `./files`:
+
+```sh
+docker compose run --rm client put video.mp4
+docker compose run --rm client status
+```
+
+## Demonstration
+
+`scripts/demo.sh` runs each demonstration required by the project statement against the running cluster
+and prints every command it runs. `PAUSE=1` waits for Enter between steps.
+
+| Required demonstration | Command | What it shows |
+| --- | --- | --- |
+| Object storage | `scripts/demo.sh storage` | upload, download, identical SHA-256 |
+| Chunking and distribution | `scripts/demo.sh chunking` | a 5.5 MiB object as six chunks, and how many each worker holds |
+| Replication | `scripts/demo.sh replication` | two copies of every chunk on different workers, confirmed by the workers' own inventories |
+| Metadata | `scripts/demo.sh metadata` | custom metadata at upload, changed and removed without re-uploading |
+| Worker failure | `scripts/demo.sh failure` | `docker stop worker2`: reads continue, chunks go at risk, then under-replicated, then repaired; `docker start worker2`: rejoins, surplus copies trimmed, replication maintained |
+| Data integrity | `scripts/demo.sh integrity` | a corrupted chunk is refused by its worker, the download is still correct, the copy is rewritten |
+| | `scripts/demo.sh scrub` | a corrupted chunk nobody reads is found by the background scrubber and repaired (up to a minute) |
+
+`scripts/demo.sh all` runs the first six in order (about two minutes). The corruption steps use a
+throwaway `alpine` container to write into a worker's volume, since the worker images have no shell.
+
+## Using the API directly
 
 ```sh
 API=localhost:8090/api/v1/objects
@@ -50,7 +95,7 @@ curl -s localhost:8090/internal/workers/worker1/chunks
 curl -s localhost:8090/internal/replication
 ```
 
-### Worker failure
+### Worker failure by hand
 
 Upload something a few MiB or larger first, so that `worker2` holds some of its chunks. Then watch
 `/internal/replication` (`replication_maintained`, the per-status chunk counts, and `copies` per worker):
@@ -68,7 +113,7 @@ curl -s $STATUS          # rejoining for 10 s, then alive: the extra copies are 
 docker logs controller   # state changes, "chunk copied" and "copy dropped" with reasons
 ```
 
-### Data corruption
+### Data corruption by hand
 
 Workers run on distroless images, so corrupt a chunk through a helper container that mounts the
 worker's volume:
@@ -102,6 +147,8 @@ Run a controller and a worker directly, without Docker:
 | --- | --- |
 | `cmd/controller` | Controller binary |
 | `cmd/worker` | Worker binary |
+| `cmd/objctl` | Command-line client |
+| `internal/client` | Go client for the controller API |
 | `internal/api` | JSON types and error helpers shared by controller and workers |
 | `internal/chunker` | Splits a stream into 1 MiB chunks with SHA-256 checksums |
 | `internal/ids` | Object and chunk identifiers |
@@ -114,6 +161,7 @@ Run a controller and a worker directly, without Docker:
 | `internal/worker` | Worker HTTP server, heartbeat agent, scrubber |
 | `internal/worker/store` | On-disk chunk store with checksum verification |
 | `internal/envflag` | Flag defaults from environment variables |
+| `scripts/demo.sh` | The required demonstrations, one command each |
 
 ## Status
 
@@ -126,5 +174,5 @@ Run a controller and a worker directly, without Docker:
 - [x] Reads fall back to the other copy; corrupt or missing copies repaired on read
 - [x] Repair loop: re-replicate chunks of dead workers, reconcile returning workers, trim surplus
 - [x] Replication status endpoint for the failure demo
-- [ ] Garbage collection of orphaned chunks and stale pending uploads
-- [ ] Client CLI and demo scripts
+- [x] Client CLI (`objctl`), client container, demo script
+- [ ] Garbage collection of orphaned chunks, stale pending uploads and leftover tombstones
