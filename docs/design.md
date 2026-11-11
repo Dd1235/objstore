@@ -72,6 +72,7 @@ against the checksum in its own metadata (end-to-end check).
 | GET | `/api/v1/objects?limit=&offset=` | 200 | oldest first; `next_offset` when more remain |
 | GET | `/internal/workers` | 200 | membership state of every worker |
 | GET | `/internal/workers/{id}/chunks` | 200 | the worker's chunk inventory, proxied by the controller |
+| GET | `/internal/replication` | 200 | whether every chunk has its required copies, per-worker copy counts, chunks that are not healthy, last repair pass |
 
 Errors are JSON `{"error": "<code>", "message": "..."}` with 400, 404, 409, 500 or 503.
 Custom metadata is limited to 64 keys, keys up to 128 bytes, values up to 2048 bytes.
@@ -97,6 +98,46 @@ never served again (I6). Its chunks are removed once no download of it is in pro
 tombstone is dropped when every copy is confirmed gone. Copies on unreachable workers are left for
 garbage collection.
 
+## Repair
+
+Every 5 seconds the controller runs a repair pass (C1, C3, C5, I3). It reads the chunk map of committed
+objects, then asks each reachable worker for its inventory, and hands both, with the membership states, to
+a pure planner (`internal/repair`) that returns a status per chunk and a list of actions.
+
+A copy counts toward the replication factor when its worker is alive or suspect within the grace period,
+and the worker's inventory lists the chunk with the right size and checksum and not marked corrupt. If an
+inventory could not be fetched, the recorded copies on that worker are presumed valid, so a slow response
+never triggers copying.
+
+| Chunk status | Meaning | Action |
+| --- | --- | --- |
+| healthy | 2 copies count, both on alive workers | none |
+| at_risk | 2 copies count, one on a suspect worker (grace period) | none yet |
+| under_replicated | fewer than 2 copies count; a readable copy exists | copy |
+| over_replicated | more than 2 valid copies | trim, in a steady state only |
+| unavailable | no readable copy is known | none possible; reported |
+
+New copies go first to a worker that already holds a valid but unrecorded copy (adopted), then to a
+recorded worker whose copy is corrupt or missing (rewritten in place), then to other alive workers in
+rendezvous order. The data is read from a source and checked against the controller's checksum before it
+is written anywhere, so a bad replica is never copied (C5). The new location is recorded in the metadata
+only after the worker acknowledges the write; if the object was deleted in the meantime the copy is
+removed again.
+
+A worker that dies keeps its entry in the chunk's replica list, because its disk may still hold the data.
+When it returns, it stays rejoining (its copies do not count) until it is alive again; the next pass then
+sees three valid copies and drops the one ranked lowest by rendezvous hashing, from the metadata first and
+then from the worker (C1). Surplus is only trimmed when every inventory is known and every copy is on an
+alive worker. A returning worker that lost its disk has its recorded copies dropped from the metadata.
+
+The first pass runs 20 seconds (`dead-after`) after the controller starts, so that after a restart every
+running worker has registered before a missing one is treated as lost (C3). Because membership is soft
+state, a worker that registers for the first time after a controller restart is alive at once; the
+inventory check still applies before anything is trimmed.
+
+`GET /internal/replication` runs the same planner against fresh inventories without acting, which is what
+the worker failure demo uses to show the replication factor before, during and after the failure.
+
 ## Controller metadata
 
 Object records live in a bbolt database at `/data/meta.db` on the controller's volume. Every write
@@ -112,10 +153,10 @@ states:
 | --- | --- | --- |
 | alive | registered, or steady heartbeats | used for new placements and reads; its replicas count |
 | suspect | no heartbeat for `suspect-after` (3 s) | not used for placements; replicas still count (grace period) |
-| dead | no heartbeat for `dead-after` (20 s) | replicas no longer count; repair starts |
+| dead | no heartbeat for `dead-after` (20 s) | replicas no longer count; the next repair pass copies them |
 
 A dead worker that comes back is held in `suspect` (rejoining) until it has heartbeated steadily for
-`rejoin-after` (10 s), and its replicas count only after the controller reconciles its inventory. A brief
+`rejoin-after` (10 s); after that its replicas count again once its inventory confirms them. A brief
 pause therefore never triggers re-replication, and a flapping worker cannot bounce straight back to alive.
 
 ## Correctness obligations
