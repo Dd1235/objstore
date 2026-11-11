@@ -99,3 +99,47 @@ type WorkerStatus struct {
 type WorkerList struct {
 	Workers []WorkerStatus `json:"workers"`
 }
+
+// ObjectChunk describes one chunk of an object and where its copies are.
+type ObjectChunk struct {
+	Index    int      `json:"index"`
+	ChunkID  string   `json:"chunk_id"`
+	Size     int64    `json:"size"`
+	SHA256   string   `json:"sha256"`
+	Replicas []string `json:"replicas"`
+}
+
+// ObjectInfo is the full metadata of an object: the response of upload and
+// of GET/PATCH /api/v1/objects/{id}/metadata.
+type ObjectInfo struct {
+	ObjectID    string            `json:"object_id"`
+	Name        string            `json:"name"`
+	Size        int64             `json:"size"`
+	ContentType string            `json:"content_type"`
+	SHA256      string            `json:"sha256"`
+	CreatedAt   time.Time         `json:"created_at"`
+	ModifiedAt  time.Time         `json:"modified_at"`
+	ChunkSize   int               `json:"chunk_size"`
+	ChunkCount  int               `json:"chunk_count"`
+	Chunks      []ObjectChunk     `json:"chunks"`
+	Metadata    map[string]string `json:"metadata"`
+}
+
+// ObjectSummary is one entry of GET /api/v1/objects.
+type ObjectSummary struct {
+	ObjectID    string    `json:"object_id"`
+	Name        string    `json:"name"`
+	Size        int64     `json:"size"`
+	ContentType string    `json:"content_type"`
+	CreatedAt   time.Time `json:"created_at"`
+	ChunkCount  int       `json:"chunk_count"`
+}
+
+// ObjectList is the response of GET /api/v1/objects.
+type ObjectList struct {
+	Objects    []ObjectSummary `json:"objects"`
+	Total      int             `json:"total"`
+	Offset     int             `json:"offset"`
+	Limit      int             `json:"limit"`
+	NextOffset *int            `json:"next_offset,omitempty"`
+}
