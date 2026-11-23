@@ -2,11 +2,11 @@ name: objstore
 
 # Shared settings for the four storage workers. Container names are fixed so
 # failures can be demonstrated with `docker stop worker2` / `docker start worker2`.
+# All four run the same image, but only worker1 declares how to build it: four
+# services building one tag at once makes BuildKit race on the export step
+# ("image ... already exists"), which fails the first build on a clean machine.
 x-worker: &worker
   image: objstore-worker:dev
-  build:
-    context: .
-    target: worker
   depends_on:
     - controller
   mem_limit: 64m
@@ -38,6 +38,9 @@ services:
 
   worker1:
     <<: *worker
+    build:
+      context: .
+      target: worker
     container_name: worker1
     environment:
       <<: *worker-env
