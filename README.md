@@ -57,15 +57,15 @@ docker compose run --rm client status
 `scripts/demo.sh` runs each demonstration required by the project statement against the running cluster
 and prints every command it runs. `PAUSE=1` waits for Enter between steps.
 
-| Required demonstration | Command | What it shows |
-| --- | --- | --- |
-| Object storage | `scripts/demo.sh storage` | upload, download, identical SHA-256 |
-| Chunking and distribution | `scripts/demo.sh chunking` | a 5.5 MiB object as six chunks, and how many each worker holds |
-| Replication | `scripts/demo.sh replication` | two copies of every chunk on different workers, confirmed by the workers' own inventories |
-| Metadata | `scripts/demo.sh metadata` | custom metadata at upload, changed and removed without re-uploading |
-| Worker failure | `scripts/demo.sh failure` | `docker stop worker2`: reads continue, chunks go at risk, then under-replicated, then repaired; `docker start worker2`: rejoins, surplus copies trimmed, replication maintained |
-| Data integrity | `scripts/demo.sh integrity` | a corrupted chunk is refused by its worker, the download is still correct, the copy is rewritten |
-| | `scripts/demo.sh scrub` | a corrupted chunk nobody reads is found by the background scrubber and repaired (up to a minute) |
+| Required demonstration    | Command                         | What it shows                                                                                                                                                                       |
+| ------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Object storage            | `scripts/demo.sh storage`     | upload, download, identical SHA-256                                                                                                                                                 |
+| Chunking and distribution | `scripts/demo.sh chunking`    | a 5.5 MiB object as six chunks, and how many each worker holds                                                                                                                      |
+| Replication               | `scripts/demo.sh replication` | two copies of every chunk on different workers, confirmed by the workers' own inventories                                                                                           |
+| Metadata                  | `scripts/demo.sh metadata`    | custom metadata at upload, changed and removed without re-uploading                                                                                                                 |
+| Worker failure            | `scripts/demo.sh failure`     | `docker stop worker2`: reads continue, chunks go at risk, then under-replicated, then repaired; `docker start worker2`: rejoins, surplus copies trimmed, replication maintained |
+| Data integrity            | `scripts/demo.sh integrity`   | a corrupted chunk is refused by its worker, the download is still correct, the copy is rewritten                                                                                    |
+|                           | `scripts/demo.sh scrub`       | a corrupted chunk nobody reads is found by the background scrubber and repaired (up to a minute)                                                                                    |
 
 `scripts/demo.sh all` runs the first six in order (about two minutes). The corruption steps use a
 throwaway `alpine` container to write into a worker's volume, since the worker images have no shell.
@@ -155,39 +155,38 @@ Run a controller and a worker directly, without Docker:
 
 ## Layout
 
-| Path | Contents |
-| --- | --- |
-| `cmd/controller` | Controller binary |
-| `cmd/worker` | Worker binary |
-| `cmd/objctl` | Command-line client |
-| `internal/client` | Go client for the controller API |
-| `internal/api` | JSON types and error helpers shared by controller and workers |
-| `internal/chunker` | Splits a stream into 1 MiB chunks with SHA-256 checksums |
-| `internal/ids` | Object and chunk identifiers |
-| `internal/membership` | Worker liveness state machine (alive / suspect / dead) |
-| `internal/placement` | Rendezvous hashing for chunk placement |
-| `internal/repair` | Repair planner: chunk status and the copy, adopt and drop actions that restore 2 copies |
-| `internal/meta` | Object metadata store (bbolt on disk, in-memory for tests) |
-| `internal/controller` | Client REST API, upload/download/delete paths, membership driver, repair loop |
-| `internal/workerclient` | Controller's client for the worker chunk API |
-| `internal/worker` | Worker HTTP server, heartbeat agent, scrubber |
-| `internal/worker/store` | On-disk chunk store with checksum verification |
-| `internal/envflag` | Flag defaults from environment variables |
-| `scripts/demo.sh` | The required demonstrations, one command each |
-| `scripts/acceptance.sh` | End-to-end tests asserting every requirement, with PASS/FAIL per check |
-| `scripts/acceptance.sh` | End-to-end tests asserting every requirement, with PASS/FAIL per check |
+| Path                      | Contents                                                                                |
+| ------------------------- | --------------------------------------------------------------------------------------- |
+| `cmd/controller`        | Controller binary                                                                       |
+| `cmd/worker`            | Worker binary                                                                           |
+| `cmd/objctl`            | Command-line client                                                                     |
+| `internal/client`       | Go client for the controller API                                                        |
+| `internal/api`          | JSON types and error helpers shared by controller and workers                           |
+| `internal/chunker`      | Splits a stream into 1 MiB chunks with SHA-256 checksums                                |
+| `internal/ids`          | Object and chunk identifiers                                                            |
+| `internal/membership`   | Worker liveness state machine (alive / suspect / dead)                                  |
+| `internal/placement`    | Rendezvous hashing for chunk placement                                                  |
+| `internal/repair`       | Repair planner: chunk status and the copy, adopt and drop actions that restore 2 copies |
+| `internal/meta`         | Object metadata store (bbolt on disk, in-memory for tests)                              |
+| `internal/controller`   | Client REST API, upload/download/delete paths, membership driver, repair loop           |
+| `internal/workerclient` | Controller's client for the worker chunk API                                            |
+| `internal/worker`       | Worker HTTP server, heartbeat agent, scrubber                                           |
+| `internal/worker/store` | On-disk chunk store with checksum verification                                          |
+| `internal/envflag`      | Flag defaults from environment variables                                                |
+| `scripts/demo.sh`       | The required demonstrations, one command each                                           |
+| `scripts/acceptance.sh` | End-to-end tests asserting every requirement, with PASS/FAIL per check                  |
 
 ## Status
 
-- [x] Chunking, identifiers, worker chunk store with checksum verification
-- [x] Worker internal API, registration, heartbeats, background scrubber
-- [x] Membership with grace period and rejoin delay
-- [x] Docker Compose deployment
-- [x] Client REST API: upload, download, metadata get/patch, delete, list
-- [x] Durable controller metadata (bbolt)
-- [x] Reads fall back to the other copy; corrupt or missing copies repaired on read
-- [x] Repair loop: re-replicate chunks of dead workers, reconcile returning workers, trim surplus
-- [x] Replication status endpoint for the failure demo
-- [x] Client CLI (`objctl`), client container, demo script
-- [x] Acceptance tests asserting every requirement of the statement (`scripts/acceptance.sh`)
+- [X] Chunking, identifiers, worker chunk store with checksum verification
+- [X] Worker internal API, registration, heartbeats, background scrubber
+- [X] Membership with grace period and rejoin delay
+- [X] Docker Compose deployment
+- [X] Client REST API: upload, download, metadata get/patch, delete, list
+- [X] Durable controller metadata (bbolt)
+- [X] Reads fall back to the other copy; corrupt or missing copies repaired on read
+- [X] Repair loop: re-replicate chunks of dead workers, reconcile returning workers, trim surplus
+- [X] Replication status endpoint for the failure demo
+- [X] Client CLI (`objctl`), client container, demo script
+- [X] Acceptance tests asserting every requirement of the statement (`scripts/acceptance.sh`)
 - [ ] Garbage collection of orphaned chunks, stale pending uploads and leftover tombstones
