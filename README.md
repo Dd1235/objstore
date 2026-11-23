@@ -129,10 +129,22 @@ docker logs controller | grep -E 'bad replica|repaired'   # the bad copy was rew
 ## Development
 
 ```sh
-make test     # go test -race ./...
+make test              # unit and integration tests: go test -race ./...
+make acceptance        # every requirement, asserted against a cluster it starts itself
+make acceptance-docker # the same assertions against the Compose cluster ("make up" first)
 make vet
-make build    # binaries in ./bin
+make build             # binaries in ./bin
 ```
+
+`scripts/acceptance.sh` is the end-to-end test: it checks every requirement of the project statement
+against a real running cluster — the REST contract and each status code, 1 MiB chunking, two copies on
+distinct workers, custom metadata changed without re-uploading, worker failure and recovery, corruption
+detected on read and by the scrubber, persistence across a restart, and the 503 paths — printing PASS or
+FAIL per check and exiting non-zero if any fail. In its default mode it starts its own controller and four
+workers on loopback ports, so it needs only Go and takes about 30 seconds (107 checks). With `-docker` it
+asserts the same things against the Compose cluster and demonstrates failure with `docker stop worker2`
+(start that cluster with `SCRUB_INTERVAL=10s make up` to include the background-scrubber check, which the
+one-minute compose default is too slow for).
 
 Run a controller and a worker directly, without Docker:
 
@@ -162,6 +174,8 @@ Run a controller and a worker directly, without Docker:
 | `internal/worker/store` | On-disk chunk store with checksum verification |
 | `internal/envflag` | Flag defaults from environment variables |
 | `scripts/demo.sh` | The required demonstrations, one command each |
+| `scripts/acceptance.sh` | End-to-end tests asserting every requirement, with PASS/FAIL per check |
+| `scripts/acceptance.sh` | End-to-end tests asserting every requirement, with PASS/FAIL per check |
 
 ## Status
 
@@ -175,4 +189,5 @@ Run a controller and a worker directly, without Docker:
 - [x] Repair loop: re-replicate chunks of dead workers, reconcile returning workers, trim surplus
 - [x] Replication status endpoint for the failure demo
 - [x] Client CLI (`objctl`), client container, demo script
+- [x] Acceptance tests asserting every requirement of the statement (`scripts/acceptance.sh`)
 - [ ] Garbage collection of orphaned chunks, stale pending uploads and leftover tombstones

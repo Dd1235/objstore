@@ -1,10 +1,19 @@
-.PHONY: build test vet fmt up down clean logs ps workers
+.PHONY: build test acceptance acceptance-docker vet fmt up down clean logs ps workers
 
 build:
 	go build -o bin/ ./cmd/...
 
 test:
 	go test -race ./...
+
+# End-to-end assertions for every requirement of the project statement.
+# Starts its own controller and four workers; needs nothing but Go.
+acceptance:
+	./scripts/acceptance.sh
+
+# The same assertions against the Docker Compose cluster (run "make up" first).
+acceptance-docker:
+	./scripts/acceptance.sh -docker
 
 vet:
 	go vet ./...
