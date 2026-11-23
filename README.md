@@ -189,4 +189,4 @@ Run a controller and a worker directly, without Docker:
 - [X] Replication status endpoint for the failure demo
 - [X] Client CLI (`objctl`), client container, demo script
 - [X] Acceptance tests asserting every requirement of the statement (`scripts/acceptance.sh`)
-- [ ] Garbage collection of orphaned chunks, stale pending uploads and leftover tombstones
+- [X] Garbage collection of orphaned chunks, stale pending uploads and leftover tombstones
